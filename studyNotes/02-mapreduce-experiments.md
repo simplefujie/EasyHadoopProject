@@ -916,7 +916,7 @@ xihuan	6
 
    可以看到如下结果：
 
-   ![image-20200419105719141](E:\Projects\EasyHadoopProject\studyNotes\02-mapreduce-experiments.assets\image-20200419105719141.png)
+   ![image-20200419105719141.png](https://github.com/simplefujie/EasyHadoopProject/blob/master/studyNotes/02-mapreduce-experiments.assets/image-20200419105719141.png)
 
 ## 3. 自定义InputFormat案例
 

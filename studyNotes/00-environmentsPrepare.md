@@ -49,7 +49,7 @@
    - 查找mirror，在找到的地方（一般是150行附近）添加如下信息，这是aliyun仓库的配置代码：
    
      ```xml
-     <mirror>
+       <mirror>
          <id>aliyun</id>
          <mirrorOf>*</mirrorOf>
          <name>aliyun Maven</name>
@@ -59,7 +59,7 @@
    
      具体如图所示
    
-     ![GN7xLn.png](https://s1.ax1x.com/2020/04/03/GN7xLn.png)
+     [![GUxWgP.png](https://s1.ax1x.com/2020/04/03/GUxWgP.png)](https://imgchr.com/i/GUxWgP)
    
 3. 配置本地仓库
 

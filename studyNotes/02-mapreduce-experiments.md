@@ -299,7 +299,7 @@ xue	1
 
 读取手机的流量信息，然后输出手机的上行流量、下行流量和总流量
 
-编写FlowBean类，实现手机流量的序列化：使用Hadoop方式的序列化而不是Java的徐留华，有很多的好处。
+编写FlowBean类，实现手机流量的序列化：使用Hadoop方式的序列化而不是Java的序列化，有很多的好处。
 
 ## 2. 实验代码
 
@@ -952,16 +952,427 @@ dongli lingu xuanxuan
 #### 3.1.2 期待输出
 
 ```
+SEQorg.apache.hadoop.io.Text"org.apache.hadoop.io.BytesWritable      ?8r鷑撾??60   ]   ('file:/e:/input/inputFormatInput/one.txt   1yongpeng weidong weinan
+sanfeng luozong xiaoming   _   *)file:/e:/input/inputFormatInput/three.txt   1shuaige changmo zhenqiang 
+dongli lingu xuanxuan   ?   ('file:/e:/input/inputFormatInput/two.txt   Xlonglong fanfan
+mazong kailun yuhang yixin
+longlong fanfan
+mazong kailun yuhang yixin
+```
 
+期望输出文件格式：**part-r-00000**
+
+#### 3.1.3 实验说明
+
+- Q：为什么要自定义InputFormat
+
+  A：在企业开发中，Hadoop自带的inputformat不能满足应用场景，需要使用自定义的
+
+- Q：自定义InputFormat步骤：
+
+  A：自定义步骤如下所示
+
+  1. 自定义一个类继承FileInputFormat
+  2. 改写RecordReader实现一次性读取一个完整文件为KV
+  3. 输出时使用SequenceFileOutputFormat输出合并文件
+
+将多个小文件合并成一个SequenceFile文件（SequenceFile文件是Hadoop用来存储二进制形式的key-value对的文件格式），SequenceFile里面存储着多个文件，存储的形式为文件路径+名称为key，文件内容为value。需求分析如下：
+
+1. 自定义一个类继承：FileInputFormat
+   - 重写isSplitable()方法，返回false表示不可切割
+   - 重写createRecordReader()，创建自定义的RecordReader对象，并初始化
+2. 改写RecordReader，实现一次读取一个完整的文件封装为KV
+   - 采用了IO流一次读取一个文件输出到value中
+   - 获取文件路径信息+名称，并设置key
+3. 设置Driver
+   - 设置输入的inputFormat类型：job.setInputFormatClass(WholeFileInputformat.class);
+   - 设置输出的outputFormat类型：job.setOutputFormatClass(SequenceFileOutputFormat.class);
+
+
+
+### 3.2 实验代码
+
+#### 3.2.1 WholeRecordReader类
+
+1. 类说明：每当读取一个文件的时候，以该文件的路径+名字作为Key，以文件内容作为value
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.inputformat;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.conf.Configuration;
+   import org.apache.hadoop.fs.FSDataInputStream;
+   import org.apache.hadoop.fs.FileSystem;
+   import org.apache.hadoop.fs.Path;
+   import org.apache.hadoop.io.BytesWritable;
+   import org.apache.hadoop.io.IOUtils;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.InputSplit;
+   import org.apache.hadoop.mapreduce.RecordReader;
+   import org.apache.hadoop.mapreduce.TaskAttemptContext;
+   import org.apache.hadoop.mapreduce.lib.input.FileSplit;
+   
+   public class WholeRecordReader extends RecordReader<Text, BytesWritable> {
+   
+   	private Configuration configuration;
+   	private FileSplit split;
+   
+   	private boolean isProgress = true;
+   	private BytesWritable value = new BytesWritable();
+   	private Text k = new Text();
+   
+   	@Override
+   	public void initialize(InputSplit split, TaskAttemptContext context) throws IOException, InterruptedException {
+   
+   		this.split = (FileSplit) split;
+   		configuration = context.getConfiguration();
+   	}
+   
+   	@Override
+   	public boolean nextKeyValue() throws IOException, InterruptedException {
+   		if (isProgress) {
+   			// 1. Define buffer
+   			byte[] contents = new byte[(int) split.getLength()];
+   			FileSystem fs = null;
+   			FSDataInputStream fis = null;
+   
+   			try {
+   				// 2. Get file system
+   				Path path = split.getPath();
+   				fs = path.getFileSystem(configuration);
+   
+   				// 3. Read data
+   				fis = fs.open(path);
+   
+   				// 4. Get file content
+   				IOUtils.readFully(fis, contents, 0, contents.length);
+   
+   				// 5. Output file content
+   				value.set(contents, 0, contents.length);
+   
+   				// 6. Get file path and file name
+   				String name = split.getPath().toString();
+   
+   				// 7. Set output key
+   				k.set(name);
+   			} catch (Exception e) {
+   				// TODO: handle exception
+   			} finally {
+   				IOUtils.closeStream(fis);
+   			}
+   			isProgress = false;
+   			return true;
+   		}
+   		return false;
+   	}
+   
+   	@Override
+   	public Text getCurrentKey() throws IOException, InterruptedException {
+   		return k;
+   	}
+   
+   	@Override
+   	public BytesWritable getCurrentValue() throws IOException, InterruptedException {
+   		return value;
+   	}
+   
+   	@Override
+   	public float getProgress() throws IOException, InterruptedException {
+   		return 0;
+   	}
+   
+   	@Override
+   	public void close() throws IOException {
+   	}
+   
+   }
+   ```
+
+   
+
+#### 3.2.2 WholeFileInputFormat类
+
+1. 类说明：初始化并且返回我们自定义的WholeRecordReader对象
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.inputformat;
+   
+   import java.io.IOException;
+   import org.apache.hadoop.fs.Path;
+   import org.apache.hadoop.io.BytesWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.InputSplit;
+   import org.apache.hadoop.mapreduce.JobContext;
+   import org.apache.hadoop.mapreduce.RecordReader;
+   import org.apache.hadoop.mapreduce.TaskAttemptContext;
+   import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+   
+   // 定义类继承FileInputFormat
+   public class WholeFileInputformat extends FileInputFormat<Text, BytesWritable> {
+   
+   	@Override
+   	protected boolean isSplitable(JobContext context, Path filename) {
+   		return false;
+   	}
+   
+   	@Override
+   	public RecordReader<Text, BytesWritable> createRecordReader(InputSplit split, TaskAttemptContext context)
+   			throws IOException, InterruptedException {
+   
+   		WholeRecordReader recordReader = new WholeRecordReader();
+   		recordReader.initialize(split, context);
+   
+   		return recordReader;
+   	}
+   }
+   ```
+
+   
+
+#### 3.2.3 SequenceFileMapper类
+
+1. 类说明：以文件名最为Key，文件内容作为Value。提供给reducer
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.inputformat;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.io.BytesWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Mapper;
+   
+   public class SequenceFileMapper extends Mapper<Text, BytesWritable, Text, BytesWritable> {
+   
+   	@Override
+   	protected void map(Text key, BytesWritable value, Context context) throws IOException, InterruptedException {
+   
+   		context.write(key, value);
+   	}
+   }
+   ```
+
+   
+
+#### 3.2.4 SequenceFileReducer类
+
+1. 类说明：将key和value写出到最终输出
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.inputformat;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.io.BytesWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Reducer;
+   
+   public class SequenceFileReducer extends Reducer<Text, BytesWritable, Text, BytesWritable> {
+   
+   	@Override
+   	protected void reduce(Text key, Iterable<BytesWritable> values, Context context)
+   			throws IOException, InterruptedException {
+   
+   		context.write(key, values.iterator().next());
+   	}
+   }
+   ```
+
+   
+
+#### 3.2.5 SequeceFileDriver类
+
+1. 类说明：
+
+   - 设置输入的inputFormat类型：job.setInputFormatClass(WholeFileInputformat.class);
+   - 设置输出的outputFormat类型：job.setOutputFormatClass(SequenceFileOutputFormat.class);
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.inputformat;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.conf.Configuration;
+   import org.apache.hadoop.fs.Path;
+   import org.apache.hadoop.io.BytesWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Job;
+   import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+   import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+   import org.apache.hadoop.mapreduce.lib.output.SequenceFileOutputFormat;
+   
+   public class SequenceFileDriver {
+   
+   	public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+   
+   		// 输入输出路径需要根据自己电脑上实际的输入输出路径设置
+   		args = new String[] { "e:/input/inputFormatInput", "e:/output/inputFormatOutput" };
+   
+   		// 1 获取job对象
+   		Configuration conf = new Configuration();
+   		Job job = Job.getInstance(conf);
+   
+   		// 2 设置jar包存储位置、关联自定义的mapper和reducer
+   		job.setJarByClass(SequenceFileDriver.class);
+   		job.setMapperClass(SequenceFileMapper.class);
+   		job.setReducerClass(SequenceFileReducer.class);
+   
+   		// 7设置输入的inputFormat
+   		job.setInputFormatClass(WholeFileInputformat.class);
+   
+   		// 8设置输出的outputFormat
+   		job.setOutputFormatClass(SequenceFileOutputFormat.class);
+   
+   // 3 设置map输出端的kv类型
+   		job.setMapOutputKeyClass(Text.class);
+   		job.setMapOutputValueClass(BytesWritable.class);
+   
+   		// 4 设置最终输出端的kv类型
+   		job.setOutputKeyClass(Text.class);
+   		job.setOutputValueClass(BytesWritable.class);
+   
+   		// 5 设置输入输出路径
+   		FileInputFormat.setInputPaths(job, new Path(args[0]));
+   		FileOutputFormat.setOutputPath(job, new Path(args[1]));
+   
+   		// 6 提交job
+   		boolean result = job.waitForCompletion(true);
+   		System.exit(result ? 0 : 1);
+   	}
+   }
+   ```
+
+
+
+# 五、 Partition分区：将结果输出到多个文件中
+
+## 1. 实验介绍
+
+### 1.1 实验输入
+
+```
+1	13736230513	192.196.100.1	www.atguigu.com	2481	24681	200
+2	13846544121	192.196.100.2			264	0	200
+3 	13956435636	192.196.100.3			132	1512	200
+4 	13966251146	192.168.100.1			240	0	404
+5 	18271575951	192.168.100.2	www.atguigu.com	1527	2106	200
+6 	84188413	192.168.100.3	www.atguigu.com	4116	1432	200
+7 	13590439668	192.168.100.4			1116	954	200
+8 	15910133277	192.168.100.5	www.hao123.com	3156	2936	200
+9 	13729199489	192.168.100.6			240	0	200
+10 	13630577991	192.168.100.7	www.shouhu.com	6960	690	200
+11 	15043685818	192.168.100.8	www.baidu.com	3659	3538	200
+12 	15959002129	192.168.100.9	www.atguigu.com	1938	180	500
+13 	13560439638	192.168.100.10			918	4938	200
+14 	13470253144	192.168.100.11			180	180	200
+15 	13682846555	192.168.100.12	www.qq.com	1938	2910	200
+16 	13992314666	192.168.100.13	www.gaga.com	3008	3720	200
+17 	13509468723	192.168.100.14	www.qinghua.com	7335	110349	404
+18 	18390173782	192.168.100.15	www.sogou.com	9531	2412	200
+19 	13975057813	192.168.100.16	www.baidu.com	11058	48243	200
+20 	13768778790	192.168.100.17			120	120	200
+21 	13568436656	192.168.100.18	www.alibaba.com	2481	24681	200
+22 	13568436656	192.168.100.19			1116	954	200
 ```
 
 
 
-#### 3.1.3 实验说明
+### 1.2 期待输出
 
-将多个小文件合并成一个SequenceFile文件（SequenceFile文件是Hadoop用来存储二进制形式的key-value对的文件格式），SequenceFile里面存储着多个文件，存储的形式为文件路径+名称为key，文件内容为value。
+```
+13470253144	180	180	360
+13509468723	7335	110349	117684
+13560439638	918	4938	5856
+13568436656	3597	25635	29232
+13590439668	1116	954	2070
+13630577991	6960	690	7650
+13682846555	1938	2910	4848
+13729199489	240	0	240
+13736230513	2481	24681	27162
+13768778790	120	120	240
+13846544121	264	0	264
+13956435636	132	1512	1644
+13966251146	240	0	240
+13975057813	11058	48243	59301
+13992314666	3008	3720	6728
+15043685818	3659	3538	7197
+15910133277	3156	2936	6092
+15959002129	1938	180	2118
+18271575951	1527	2106	3633
+18390173782	9531	2412	11943
+84188413	4116	1432	5548
+```
 
+应该有5个输出文件：
 
+![image-20200419155255436](.\02-mapreduce-experiments.assets\image-20200419155255436.png)
+
+### 1.3 实验说明
+
+读取手机的流量信息，然后输出手机的上行流量、下行流量和总流量
+
+手机号136、137、138、139开头都分别放到一个独立的4个文件中，其他开头的放到一个文件中。
+
+## 2. 实验代码
+
+### 2.1 ProvincePartitioner类
+
+1. 类说明：我们在FlowSum实验的基础上添加了ProvincePartitioner类，用来区分不同的手机号。继承Partitioner类，重写getPartition方法
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.partition;
+   
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Partitioner;
+   
+   public class ProvincePartitioner extends Partitioner<Text, FlowBean> {
+   
+   	@Override
+   	public int getPartition(Text key, FlowBean value, int numPartitions) {
+   
+   		// 1. Get first 3 numbers of phone number
+   		String preNum = key.toString().substring(0, 3);
+   
+   		int partition = 4;
+   		// 2. Verify province
+   		if ("136".equals(preNum)) {
+   			partition = 0;
+   		} else if ("137".equals(preNum)) {
+   			partition = 1;
+   		} else if ("138".equals(preNum)) {
+   			partition = 2;
+   		} else if ("139".equals(preNum)) {
+   			partition = 3;
+   		}
+   		return partition;
+   	}
+   }
+   ```
+
+### 2.2 FlowsumDriver类
+
+1. 类说明：增加自定义数据分区设置和ReduceTask设置
+
+2. 类代码：
+
+   ```java
+   
+   ```
+
+   
 
 
 

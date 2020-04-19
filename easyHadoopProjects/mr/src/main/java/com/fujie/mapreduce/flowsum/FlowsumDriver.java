@@ -13,7 +13,7 @@ public class FlowsumDriver {
 
 	public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
 		// Set input path and output path
-		args = new String[] { "e:/input/inputflow", "e:/output1" };
+		args = new String[] { "e:/input/flowSum", "e:/output/flowSum" };
 
 		// 1. Get configuration information, or job object instance
 		Configuration conf = new Configuration();

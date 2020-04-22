@@ -1369,10 +1369,677 @@ mazong kailun yuhang yixin
 2. 类代码：
 
    ```java
+   package com.fujie.mapreduce.partition;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.conf.Configuration;
+   import org.apache.hadoop.fs.Path;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Job;
+   import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+   import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+   
+   public class FlowsumDriver {
+   
+   	public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+   		// Set input path and output path
+   		args = new String[] { "e:/input/partition", "e:/output/partition" };
+   
+   		// 1. Get configuration information, or job object instance
+   		Configuration conf = new Configuration();
+   		Job job = Job.getInstance(conf);
+   
+   		// 2. Specify the local path where the jar package of this program is located
+   		job.setJarByClass(FlowsumDriver.class);
+   
+   		// 3. Specify the mapper class and the reducer class
+   		job.setMapperClass(FlowCountMapper.class);
+   		job.setReducerClass(FlowCountReducer.class);
+   
+   		// 4. Specify map output key type and value type
+   		job.setMapOutputKeyClass(Text.class);
+   		job.setMapOutputValueClass(FlowBean.class);
+   
+   		// 5. Specify final output key type and value type
+   		job.setOutputKeyClass(Text.class);
+   		job.setOutputValueClass(FlowBean.class);
+   
+   		// 8 指定自定义数据分区
+   		job.setPartitionerClass(ProvincePartitioner.class);
+   
+   		// 9 同时指定相应数量的reduce task
+   		job.setNumReduceTasks(5);
+   
+   		// 6. Specify the directory where the original input file of the job is located
+   		FileInputFormat.setInputPaths(job, new Path(args[0]));
+   		FileOutputFormat.setOutputPath(job, new Path(args[1]));
+   
+   		// 7. Submit
+   		Boolean result = job.waitForCompletion(true);
+   		System.exit(result ? 0 : 1);
+   	}
+   }
+   
+   ```
+
+# 六、 排序
+
+1. map的排序过程：
+
+   - 默认排序是按照字典顺序排序，且实现该排序的方法是快速排序
+   - 对于MapTask，它会将处理的结果暂时放到环形缓冲区中，当环形缓冲区使用率达到一定阈值后，再对缓冲区中的数据进行一次快速排序，并将这些有序数据溢写到磁盘上，而当数据处理完毕后，它会对磁盘上所有文件进行归并排序。
+
+2. reduce排序过程：
+
+   对于ReduceTask，它从每个MapTask上远程拷贝相应的数据文件，如果文件大小超过一定阈值，则溢写磁盘上，否则存储在内存中。如果磁盘上文件数目达到一定阈值，则进行一次归并排序以生成一个更大文件；如果内存中文件大小或者数目超过一定阈值，则进行一次合并后将数据溢写到磁盘上。当所有数据拷贝完毕后，ReduceTask统一对内存和磁盘上的所有数据进行一次归并排序。
+
+
+
+## 1. FlowCountSort排序案例
+
+### 1.1 实验介绍
+
+#### 1.1.1 实验输入
+
+```
+13470253144	180	180	360
+13509468723	7335	110349	117684
+13560439638	918	4938	5856
+13568436656	3597	25635	29232
+13590439668	1116	954	2070
+13630577991	6960	690	7650
+13682846555	1938	2910	4848
+13729199489	240	0	240
+13736230513	2481	24681	27162
+13768778790	120	120	240
+13846544121	264	0	264
+13956435636	132	1512	1644
+13966251146	240	0	240
+13975057813	11058	48243	59301
+13992314666	3008	3720	6728
+15043685818	3659	3538	7197
+15910133277	3156	2936	6092
+15959002129	1938	180	2118
+18271575951	1527	2106	3633
+18390173782	9531	2412	11943
+84188413	4116	1432	5548
+```
+
+
+
+#### 1.1.2 期待输出
+
+```
+c
+```
+
+
+
+#### 1.1.3 实验说明
+
+根据案例2.3 Flowsum产生的结果再次对总流量进行排序
+
+### 1.2 实验代码
+
+#### 2.1.1 FlowBean类
+
+1. 类介绍：在原始的基础上，增加了比较部分compareTo
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.sort;
+   
+   import java.io.DataInput;
+   import java.io.DataOutput;
+   import java.io.IOException;
+   
+   import org.apache.hadoop.io.WritableComparable;
+   
+   // 1. Implement the writable interface
+   public class FlowBean implements WritableComparable<FlowBean> {
+   
+   	private long upFlow;
+   	private long downFlow;
+   	private long sumFlow;
+   
+   	// When deserializing, you need to call the empty parameter constructor, so you
+   	// must have
+   	public FlowBean() {
+   		super();
+   	}
+   
+   	public FlowBean(long upFlow, long downFlow) {
+   		super();
+   		this.upFlow = upFlow;
+   		this.downFlow = downFlow;
+   		this.sumFlow = upFlow + downFlow;
+   	}
+   
+   	// Write serialization method
+   	public void write(DataOutput out) throws IOException {
+   		out.writeLong(upFlow);
+   		out.writeLong(downFlow);
+   		out.writeLong(sumFlow);
+   	}
+   
+   	// Deserialization method
+   	// The read sequence of the deserialization method must be the same as the write
+   	// sequence of the write serialization method
+   	public void readFields(DataInput in) throws IOException {
+   		this.upFlow = in.readLong();
+   		this.downFlow = in.readLong();
+   		this.sumFlow = in.readLong();
+   	}
+   
+   	// Write toString method to facilitate subsequent printing to text
+   	@Override
+   	public String toString() {
+   		return upFlow + "\t" + downFlow + "\t" + sumFlow;
+   	}
+   
+   	// set and get methods
+   	public long getUpFlow() {
+   		return upFlow;
+   	}
+   
+   	public void setUpFlow(long upFlow) {
+   		this.upFlow = upFlow;
+   	}
+   
+   	public long getDownFlow() {
+   		return downFlow;
+   	}
+   
+   	public void setDownFlow(long downFlow) {
+   		this.downFlow = downFlow;
+   	}
+   
+   	public long getSumFlow() {
+   		return sumFlow;
+   	}
+   
+   	public void setSumFlow(long sumFlow) {
+   		this.sumFlow = sumFlow;
+   	}
+   
+   	public void set(long upFlow2, long downFlow2) {
+   		this.upFlow = upFlow2;
+   		this.downFlow = downFlow2;
+   		this.sumFlow = upFlow2 + downFlow2;
+   	}
+   
+   	// Add compare function
+   	public int compareTo(FlowBean bean) {
+   
+   		int result;
+   		// According to the total flow size, in reverse order
+   		if (sumFlow > bean.getSumFlow()) {
+   			result = -1;
+   		} else if (sumFlow < bean.getSumFlow()) {
+   			result = 1;
+   		} else {
+   			result = 0;
+   		}
+   
+   		return result;
+   
+   	}
+   }
+   ```
+
+#### 1.2.2 FlowCountSortMapper类
+
+1. 类介绍：
+
+   输出key为Bean，因为排序过程是也key作为排序的，所以要把Bean作为key
+
+   输出value为phoneNumber
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.sort;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.io.LongWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Mapper;
+   
+   public class FlowCountSortMapper extends Mapper<LongWritable, Text, FlowBean, Text> {
+   
+   	FlowBean bean = new FlowBean();
+   	Text v = new Text();
+   
+   	@Override
+   	protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+   
+   		// 1 获取一行
+   		String line = value.toString();
+   
+   		// 2 截取
+   		String[] fields = line.split("\t");
+   
+   		// 3 封装对象
+   		String phoneNbr = fields[0];
+   		long upFlow = Long.parseLong(fields[1]);
+   		long downFlow = Long.parseLong(fields[2]);
+   
+   		bean.set(upFlow, downFlow);
+   		v.set(phoneNbr);
+   
+   		// 4 输出
+   		context.write(bean, v);
+   	}
+   }
+   ```
+
+   
+
+#### 1.2.3 FlowCountSortReducer类
+
+1. 类介绍：
+
+   输出结果key为手机号
+
+   输出结果value为Bean
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.sort;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Reducer;
+   
+   public class FlowCountSortReducer extends Reducer<FlowBean, Text, Text, FlowBean> {
+   
+   	@Override
+   	protected void reduce(FlowBean key, Iterable<Text> values, Context context)
+   			throws IOException, InterruptedException {
+   
+   		// 循环输出，避免总流量相同情况
+   		for (Text text : values) {
+   			context.write(text, key);
+   		}
+   	}
+   }
+   ```
+
+
+
+## 2. WordcountCombiner案例：区内排序
+
+### 2.1 实验介绍
+
+#### 2.1.1 实验输入
+
+```
+13470253144	180	180	360
+13509468723	7335	110349	117684
+13560439638	918	4938	5856
+13568436656	3597	25635	29232
+13590439668	1116	954	2070
+13630577991	6960	690	7650
+13682846555	1938	2910	4848
+13729199489	240	0	240
+13736230513	2481	24681	27162
+13768778790	120	120	240
+13846544121	264	0	264
+13956435636	132	1512	1644
+13966251146	240	0	240
+13975057813	11058	48243	59301
+13992314666	3008	3720	6728
+15043685818	3659	3538	7197
+15910133277	3156	2936	6092
+15959002129	1938	180	2118
+18271575951	1527	2106	3633
+18390173782	9531	2412	11943
+84188413	4116	1432	5548
+```
+
+
+
+#### 2.1.2 期待输出
+
+```
+13470253144	180	180	360
+13509468723	7335	110349	117684
+13560439638	918	4938	5856
+13568436656	3597	25635	29232
+13590439668	1116	954	2070
+13630577991	6960	690	7650
+13682846555	1938	2910	4848
+13729199489	240	0	240
+13736230513	2481	24681	27162
+13768778790	120	120	240
+13846544121	264	0	264
+13956435636	132	1512	1644
+13966251146	240	0	240
+13975057813	11058	48243	59301
+13992314666	3008	3720	6728
+15043685818	3659	3538	7197
+15910133277	3156	2936	6092
+15959002129	1938	180	2118
+18271575951	1527	2106	3633
+18390173782	9531	2412	11943
+84188413	4116	1432	5548
+```
+
+期待看到多个输出文件，每个文件内都是有序的
+
+#### 2.1.3 实验说明
+
+在上一个实验的基础上，添加了自定义分区类
+
+在Driver中设置了自定义分区类和Reducetask的个数
+
+### 2.2 实验代码
+
+#### 2.2.1 ProvincePartitioner类
+
+1. 类说明：extends Partitioner<FlowBean, Text>
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.partitionSort;
+   
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Partitioner;
+   
+   public class ProvincePartitioner extends Partitioner<FlowBean, Text> {
+   
+   	@Override
+   	public int getPartition(FlowBean key, Text value, int numPartitions) {
+   
+   		// 1 获取手机号码前三位
+   		String preNum = value.toString().substring(0, 3);
+   
+   		int partition = 4;
+   
+   		// 2 根据手机号归属地设置分区
+   		if ("136".equals(preNum)) {
+   			partition = 0;
+   		} else if ("137".equals(preNum)) {
+   			partition = 1;
+   		} else if ("138".equals(preNum)) {
+   			partition = 2;
+   		} else if ("139".equals(preNum)) {
+   			partition = 3;
+   		}
+   
+   		return partition;
+   	}
+   }
+   ```
+
+   
+
+#### 2.2.2 FlowCountSortDriver类
+
+1. 类说明：设置了自定义分区类和Reducetask的个数
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.partitionSort;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.conf.Configuration;
+   import org.apache.hadoop.fs.Path;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Job;
+   import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+   import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+   
+   public class FlowCountSortDriver {
+   
+   	public static void main(String[] args) throws ClassNotFoundException, IOException, InterruptedException {
+   
+   		// 输入输出路径需要根据自己电脑上实际的输入输出路径设置
+   		args = new String[] { "e:/output/flowSum", "e:/output/partitionSort" };
+   
+   		// 1 获取配置信息，或者job对象实例
+   		Configuration configuration = new Configuration();
+   		Job job = Job.getInstance(configuration);
+   
+   		// 2 指定本程序的jar包所在的本地路径
+   		job.setJarByClass(FlowCountSortDriver.class);
+   
+   		// 3 指定本业务job要使用的mapper/Reducer业务类
+   		job.setMapperClass(FlowCountSortMapper.class);
+   		job.setReducerClass(FlowCountSortReducer.class);
+   
+   		// 4 指定mapper输出数据的kv类型
+   		job.setMapOutputKeyClass(FlowBean.class);
+   		job.setMapOutputValueClass(Text.class);
+   
+   		// 5 指定最终输出的数据的kv类型
+   		job.setOutputKeyClass(Text.class);
+   		job.setOutputValueClass(FlowBean.class);
+   
+   		// 加载自定义分区类
+   		job.setPartitionerClass(ProvincePartitioner.class);
+   
+   		// 设置Reducetask个数
+   		job.setNumReduceTasks(5);
+   
+   		// 6 指定job的输入原始文件所在目录
+   		FileInputFormat.setInputPaths(job, new Path(args[0]));
+   		FileOutputFormat.setOutputPath(job, new Path(args[1]));
+   
+   		// 7 将job中配置的相关参数，以及job所用的java类所在的jar包， 提交给yarn去运行
+   		boolean result = job.waitForCompletion(true);
+   		System.exit(result ? 0 : 1);
+   	}
+   }
+   ```
+
+
+
+# 七、 Conbiner合并：将map输出进行合并，从而减小网络传输量
+
+## 
+
+## 1. 试验介绍
+
+### 1.1 实验输入
+
+```
+banzhang ni hao
+xihuan hadoop banzhang
+banzhang ni hao
+xihuan hadoop banzhang
+```
+
+
+
+### 1.2 期待输出
+
+```
+banzhang	4
+hadoop	2
+hao	2
+ni	2
+xihuan	2
+```
+
+可以看到combiner发生了作用，本来map的输出由12个变成了5个
+
+![image-20200421161906124](.\02-mapreduce-experiments.assets\image-20200421161906124.png)
+
+### 1.3 实验说明
+
+增加一个WordcountCombiner类继承Reducer
+
+## 2. 实验代码
+
+### 2.1 WordcountCombiner类
+
+1. 类说明：这个类和Reducer类很像，就是做了汇总的工作
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.combier;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.io.IntWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Reducer;
+   
+   public class WordcountCombiner extends Reducer<Text, IntWritable, Text, IntWritable> {
+   
+   	IntWritable v = new IntWritable();
+   
+   	@Override
+   	protected void reduce(Text key, Iterable<IntWritable> values, Context context)
+   			throws IOException, InterruptedException {
+   		// 1. Summarize
+   		int sum = 0;
+   		for (IntWritable value : values) {
+   			sum += value.get();
+   		}
+   		v.set(sum);
+   
+   		// 2. Write out
+   		context.write(key, v);
+   	}
+   }
+   
+   ```
+
+### 2.2 WordcountDriver类
+
+1. 类说明：指定了CombinerClass，直接指定CombinerClass为Reducer类也是可以的
+
+2. 类代码：
+
+   ```java
+   package com.fujie.mapreduce.combier;
+   
+   import java.io.IOException;
+   
+   import org.apache.hadoop.conf.Configuration;
+   import org.apache.hadoop.fs.Path;
+   import org.apache.hadoop.io.IntWritable;
+   import org.apache.hadoop.io.Text;
+   import org.apache.hadoop.mapreduce.Job;
+   import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+   import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+   
+   /**
+    * Driver will configure yarn
+    * 
+    * 1. Get job object
+    * 
+    * 2. Specify jar class, Mapper class and Reducer class (3)
+    * 
+    * 3. Specify Mapper input and output class and Final input and output class (2)
+    * 
+    * 4. Submit (1)
+    */
+   public class WordcountDriver {
+   
+   	public static void main(String[] args) throws IOException, ClassNotFoundException, InterruptedException {
+   
+   		args = new String[] { "e:/input/combiner", "e:/output/combiner" };
+   		// 1. Obtain configuration information and packaging tasks
+   		Configuration conf = new Configuration();
+   		Job job = Job.getInstance(conf);
+   
+   		// 2. Set jar loading path
+   		job.setJarByClass(WordcountDriver.class);
+   
+   		// 3. set map and reduce class
+   		job.setMapperClass(WordcountMapper.class);
+   		job.setReducerClass(WordcountReducer.class);
+   
+   		// 4. set map output
+   		job.setMapOutputKeyClass(Text.class);
+   		job.setOutputValueClass(IntWritable.class);
+   
+   		// 5. set final k and v output type
+   		job.setOutputKeyClass(Text.class);
+   		job.setOutputValueClass(IntWritable.class);
+   
+   		// 6. set input path and output path
+   		FileInputFormat.setInputPaths(job, new Path(args[0]));
+   		FileOutputFormat.setOutputPath(job, new Path(args[1]));
+   
+   		// 8. set combiner class
+   		job.setCombinerClass(WordcountCombiner.class);
+   
+   		// 7. submit
+   		boolean result = job.waitForCompletion(true);
+   		System.exit(result ? 0 : 1);
+   	}
+   
+   }
+   ```
+
+# 八、 GroupingComparator分组（辅助排序）
+
+## 1. 试验介绍
+
+### 1.1 实验输入
+
+```
+0000001	Pdt_01	222.8
+0000002	Pdt_05	722.4
+0000001	Pdt_02	33.8
+0000003	Pdt_06	232.8
+0000003	Pdt_02	33.8
+0000002	Pdt_03	522.8
+0000002	Pdt_04	122.4
+```
+
+
+
+### 1.2 期待输出
+
+```
+1	222.8
+2	722.4
+3	232.8
+```
+
+
+
+### 1.3 实验说明
+
+（1）利用“订单id和成交金额”作为key，可以将Map阶段读取到的所有订单数据按照id升序排序，如果id相同再按照金额降序排序，发送到Reduce。
+
+（2）在Reduce端利用groupingComparator将订单id相同的kv聚合成组，然后取第一个即是该订单中最贵商品，如图4-18所示。
+
+## 2. 实验代码
+
+### 2.1 OrderBean类
+
+1. 类说明：定义订单信息
+
+2. 类代码：
+
+   ```java
    
    ```
 
    
+
+
+
+
+
+
+
+
 
 
 
